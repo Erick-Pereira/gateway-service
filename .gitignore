@@ -1,17 +1,46 @@
-# Visual Studio
-.vs/
+# Version control
+.git
+.gitignore
+.gitattributes
 
-# Build folders
-bin/
-obj/
+# CI/CD & Development
+.gitlab-ci.yml
+.vscode
+.vs
 
-# User files
-*.user
-*.suo
-
-# Logs
-*.log
-
-# OS
+# IDEs
+*.swp
+*.swo
+*~
 .DS_Store
-Thumbs.db
+
+# Build output (per service)
+**/bin/
+**/obj/
+**/out/
+
+# NuGet cache (allow .csproj files)
+packages/
+*.nupkg
+
+# Test results
+TestResults/
+*.trx
+
+# Documentation (allow only critical)
+*.md
+license/
+docs/
+
+# Docker files (keep for build)
+# Excluded by default, but we want to keep them
+# docker-compose* - EXCLUDED
+# Dockerfile* - EXCLUDED
+
+# Others
+*.log
+.env.local
+**/secrets.dev.yaml
+**/values.dev.yaml
+**/azds.yaml
+*.env

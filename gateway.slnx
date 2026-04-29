@@ -1,6 +1,0 @@
-<Solution>
-  <Project Path="F:/p/gateway/gateway/gateway.csproj" />
-  <Project Path="F:/p/gateway/Simcag.Gateway.Application/Simcag.Gateway.Application.csproj" Id="1fbe5cb1-705f-4df7-b522-77cf0c853781" />
-  <Project Path="F:/p/gateway/Simcag.Gateway.Infrastructure/Simcag.Gateway.Infrastructure.csproj" Id="933c4200-b14b-44bf-964f-1039f5dfbab3" />
-  <Project Path="F:/p/gateway/Simcag.Gateway.Tests/Simcag.Gateway.Tests.csproj" Id="7ca87e8b-5a84-4050-aa5e-81949666260c" />
-</Solution>

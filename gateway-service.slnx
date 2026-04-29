@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Simcag.Gateway.Api/Simcag.Gateway.Api.csproj" />
+  <Project Path="Simcag.Gateway.Application/Simcag.Gateway.Application.csproj" />
+  <Project Path="Simcag.Gateway.Domain/Simcag.Gateway.Domain.csproj" />
+  <Project Path="Simcag.Gateway.Infrastructure/Simcag.Gateway.Infrastructure.csproj" />
+  <Project Path="Simcag.Gateway.Tests/Simcag.Gateway.Tests.csproj" />
+</Solution>

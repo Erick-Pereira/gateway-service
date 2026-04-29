@@ -3,10 +3,11 @@
     "Simcag.Gateway.Api": {
       "commandName": "Project",
       "launchBrowser": true,
+      "launchUrl": "swagger",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:55965;http://localhost:55967"
+      "applicationUrl": "http://localhost:5000"
     }
   }
 }

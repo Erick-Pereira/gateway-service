@@ -1,30 +1,65 @@
-**/.classpath
-**/.dockerignore
-**/.env
-**/.git
-**/.gitignore
-**/.project
-**/.settings
-**/.toolstarget
-**/.vs
-**/.vscode
-**/*.*proj.user
-**/*.dbmdl
-**/*.jfm
-**/azds.yaml
-**/bin
-**/charts
-**/docker-compose*
-**/Dockerfile*
-**/node_modules
-**/npm-debug.log
-**/obj
-**/secrets.dev.yaml
-**/values.dev.yaml
-LICENSE
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Visual Studio
+.vs
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio Team Services
+*_vs
+
+# Build outputs
+bin/
+obj/
+**/bin/
+**/obj/
+
+# NuGet
+*.nupkg
+*.snupkg
+*.snupkg.mdb
+*.pdb
+
+# Test outputs
+TestResults/
+
+# IDE
+*.sln.docstates
+*.slnv1
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Documentation
+*.md
 README.md
-!**/.gitignore
-!.git/HEAD
-!.git/config
-!.git/packed-refs
-!.git/refs/heads/**
+*.docx
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.old
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Solution (opcional no contexto Docker; não necessário no COPY do Dockerfile)
+gateway-service.slnx
+
+# Keep these for debugging
+*.http
