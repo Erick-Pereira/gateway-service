@@ -157,8 +157,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(options =>
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "Gateway");
-        // Documentos OpenAPI dos serviços downstream (proxy direto ao Swagger de cada um).
-        // Cada serviço deve expor /swagger/v1/swagger.json. O gateway só agrega os links.
+        // Documentos OpenAPI dos serviços downstream (proxy em /api/<serviço>-docs/... → /swagger/v1/swagger.json).
         options.SwaggerEndpoint("/api/identity-docs/swagger/v1/swagger.json", "Identity");
         options.SwaggerEndpoint("/api/ingestion-docs/swagger/v1/swagger.json", "Ingestion");
         options.SwaggerEndpoint("/api/processing-docs/swagger/v1/swagger.json", "Processing");
@@ -166,6 +165,7 @@ if (app.Environment.IsDevelopment())
         options.SwaggerEndpoint("/api/notification-docs/swagger/v1/swagger.json", "Notification");
         options.SwaggerEndpoint("/api/price-analysis-docs/swagger/v1/swagger.json", "Price Analysis");
         options.SwaggerEndpoint("/api/market-data-docs/swagger/v1/swagger.json", "Market Data");
+        options.SwaggerEndpoint("/api/ai-docs/swagger/v1/swagger.json", "IA (AI Service)");
         options.RoutePrefix = "swagger";
         options.DocumentTitle = "SIMC-AG Gateway — Swagger";
     });

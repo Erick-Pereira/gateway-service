@@ -48,10 +48,30 @@ public static class YarpConfig
             },
             new RouteConfig
             {
-                RouteId = "processing-route",
+                RouteId = "audit-logs-route",
                 ClusterId = "processing-cluster",
-                Match = new RouteMatch { Path = "/api/audit/{**catch-all}" },
-                Transforms = new[] { new Dictionary<string, string> { { "PathRemovePrefix", "/api/audit" } } }
+                Match = new RouteMatch { Path = "/api/audit-logs/{**catch-all}" },
+                AuthorizationPolicy = "AdminOnly"
+            },
+            new RouteConfig
+            {
+                RouteId = "payments-route",
+                ClusterId = "processing-cluster",
+                Match = new RouteMatch { Path = "/api/payments/{**catch-all}" }
+            },
+            new RouteConfig
+            {
+                RouteId = "reports-route",
+                ClusterId = "processing-cluster",
+                Match = new RouteMatch { Path = "/api/reports/{**catch-all}" }
+            },
+            // Refresh da MView do processing — path absoluto no downstream; deve ir ao processing, não ao identity.
+            new RouteConfig
+            {
+                RouteId = "processing-admin-refresh-dashboard-route",
+                ClusterId = "processing-cluster",
+                Match = new RouteMatch { Path = "/api/admin/refresh-dashboard" },
+                AuthorizationPolicy = "AdminOnly"
             },
             new RouteConfig
             {
@@ -72,6 +92,13 @@ public static class YarpConfig
                 RouteId = "expenses-route",
                 ClusterId = "processing-cluster",
                 Match = new RouteMatch { Path = "/api/expenses/{**catch-all}" }
+            },
+            new RouteConfig
+            {
+                RouteId = "suppliers-merge-route",
+                ClusterId = "processing-cluster",
+                Match = new RouteMatch { Path = "/api/suppliers/merge" },
+                AuthorizationPolicy = "AdminOnly"
             },
             new RouteConfig
             {
