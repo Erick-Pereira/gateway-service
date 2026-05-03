@@ -9,25 +9,34 @@ using Simcag.Gateway.Infrastructure.Configuration;
 using Simcag.Gateway.Infrastructure.Middleware;
 using Simcag.Gateway.Api.Middleware;
 using DotNetEnv;
+using Microsoft.AspNetCore.Hosting;
 using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMiddleware;
 
 DotNetEnv.Env.Load();
 
-// Em Docker, ASPNETCORE_URLS copiado do launchSettings (ex.: http://localhost:5000) sobrescreve a imagem
-// e quebra HEALTHCHECK/proxy (a app escuta noutra porta e só em loopback). Forçar escuta em todas as interfaces.
+// Docker: alinhar com Simcag.Shared.Hosting.ContainerListenConfiguration (gateway não referencia Shared).
 if (string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
 {
-    var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
-    if (!string.IsNullOrWhiteSpace(urls)
-        && urls.Contains("localhost", StringComparison.OrdinalIgnoreCase)
-        && !urls.Contains("+:", StringComparison.OrdinalIgnoreCase)
-        && !urls.Contains("0.0.0.0", StringComparison.OrdinalIgnoreCase))
+    var httpPorts = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
+    if (!string.IsNullOrWhiteSpace(httpPorts))
     {
-        Environment.SetEnvironmentVariable("ASPNETCORE_URLS", "http://+:8080");
+        var firstPortToken = httpPorts.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        if (int.TryParse(firstPortToken, out var expectedPort) && expectedPort > 0
+            && !GatewayFirstHttpListenIsCompatible(expectedPort))
+        {
+            Environment.SetEnvironmentVariable("ASPNETCORE_URLS", $"http://+:{expectedPort}");
+        }
+    }
+    else
+    {
+        var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+        if (!string.IsNullOrWhiteSpace(urls) && AllAspNetCoreUrlSegmentsAreLoopback(urls))
+            Environment.SetEnvironmentVariable("ASPNETCORE_URLS", null);
     }
 }
 
 var builder = WebApplication.CreateBuilder(args);
+GatewayApplyDockerListenUrls(builder);
 
 static string? GetEnv(params string[] keys)
 {
@@ -210,6 +219,69 @@ app.MapControllers();
 app.MapReverseProxy();
 
 app.Run();
+
+static void GatewayApplyDockerListenUrls(WebApplicationBuilder builder)
+{
+    if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    var httpPorts = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
+    if (string.IsNullOrWhiteSpace(httpPorts))
+        return;
+
+    var firstPortToken = httpPorts.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+    if (!int.TryParse(firstPortToken, out var expectedPort) || expectedPort <= 0)
+        return;
+
+    if (GatewayFirstHttpListenIsCompatible(expectedPort))
+        return;
+
+    Environment.SetEnvironmentVariable("ASPNETCORE_URLS", null);
+    builder.WebHost.UseSetting(WebHostDefaults.ServerUrlsKey, $"http://+:{expectedPort}");
+}
+
+static bool GatewayFirstHttpListenIsCompatible(int expectedPort)
+{
+    var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+    if (string.IsNullOrWhiteSpace(urls))
+        return false;
+
+    foreach (var segment in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!Uri.TryCreate(segment, UriKind.Absolute, out var uri))
+            return false;
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+            continue;
+
+        return uri.Port == expectedPort && GatewayIsAcceptableListenHost(uri);
+    }
+
+    return false;
+}
+
+static bool GatewayIsAcceptableListenHost(Uri uri)
+{
+    if (uri.IsLoopback)
+        return true;
+
+    return uri.Host switch
+    {
+        "+" or "*" or "0.0.0.0" or "[::]" => true,
+        "::" => true,
+        _ => false
+    };
+}
+
+static bool AllAspNetCoreUrlSegmentsAreLoopback(string aspNetCoreUrls)
+{
+    foreach (var segment in aspNetCoreUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!Uri.TryCreate(segment, UriKind.Absolute, out var uri) || !uri.IsLoopback)
+            return false;
+    }
+
+    return true;
+}
 
 file static class DevJwtSecretFallback
 {

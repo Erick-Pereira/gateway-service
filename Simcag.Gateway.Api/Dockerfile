@@ -1,4 +1,4 @@
-# Multi-stage — contexto: pasta gateway-service (sem Simcag.Shared / sem TOKEN).
+# Multi-stage — contexto: pasta gateway-service (sem Simcag.Shared no projeto; sem TOKEN).
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
 
@@ -47,6 +47,6 @@ EXPOSE 8080
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -fsS http://localhost:8080/health >/dev/null || exit 1
+    CMD sh -c 'p="${ASPNETCORE_HTTP_PORTS:-8080}"; p="${p%%,*}"; curl -fsS "http://localhost:${p}/health" >/dev/null || exit 1'
 
 ENTRYPOINT ["dotnet", "Simcag.Gateway.Api.dll"]
