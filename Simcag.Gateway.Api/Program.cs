@@ -12,6 +12,21 @@ using DotNetEnv;
 using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMiddleware;
 
 DotNetEnv.Env.Load();
+
+// Em Docker, ASPNETCORE_URLS copiado do launchSettings (ex.: http://localhost:5000) sobrescreve a imagem
+// e quebra HEALTHCHECK/proxy (a app escuta noutra porta e só em loopback). Forçar escuta em todas as interfaces.
+if (string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
+{
+    var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+    if (!string.IsNullOrWhiteSpace(urls)
+        && urls.Contains("localhost", StringComparison.OrdinalIgnoreCase)
+        && !urls.Contains("+:", StringComparison.OrdinalIgnoreCase)
+        && !urls.Contains("0.0.0.0", StringComparison.OrdinalIgnoreCase))
+    {
+        Environment.SetEnvironmentVariable("ASPNETCORE_URLS", "http://+:8080");
+    }
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 static string? GetEnv(params string[] keys)
