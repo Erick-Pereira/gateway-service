@@ -15,24 +15,25 @@ using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMi
 // Não sobrescrever variáveis já definidas (Docker/Portainer): .env local é só fallback.
 DotNetEnv.Env.NoClobber().Load();
 
-// Docker: alinhar com Simcag.Shared.Hosting.ContainerListenConfiguration (gateway não referencia Shared).
+// Docker: o mesmo .env que no PC (ASPNETCORE_URLS=http://localhost:5000) faz o Kestrel escutar só em loopback
+// dentro do contentor — o mapeamento potato-server:5000 não chega à app. Reescrever para http://+:porta.
 if (string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
 {
-    var httpPorts = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
-    if (!string.IsNullOrWhiteSpace(httpPorts))
+    var aspNetUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+    if (!string.IsNullOrWhiteSpace(aspNetUrls) && AllAspNetCoreUrlSegmentsAreLoopback(aspNetUrls))
     {
-        var firstPortToken = httpPorts.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        var fromLoopbackUrl = GatewayFirstHttpListenPortFromLoopbackAspNetCoreUrls(aspNetUrls);
+        var fromHttpPorts = GatewayParseFirstAspNetCoreHttpPort();
+        var listenPort = fromLoopbackUrl ?? fromHttpPorts ?? 8080;
+        Environment.SetEnvironmentVariable("ASPNETCORE_URLS", $"http://+:{listenPort}");
+    }
+    else if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS")))
+    {
+        var httpPortsRaw = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
+        var firstPortToken = httpPortsRaw!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
         if (int.TryParse(firstPortToken, out var expectedPort) && expectedPort > 0
             && !GatewayFirstHttpListenIsCompatible(expectedPort))
-        {
             Environment.SetEnvironmentVariable("ASPNETCORE_URLS", $"http://+:{expectedPort}");
-        }
-    }
-    else
-    {
-        var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
-        if (!string.IsNullOrWhiteSpace(urls) && AllAspNetCoreUrlSegmentsAreLoopback(urls))
-            Environment.SetEnvironmentVariable("ASPNETCORE_URLS", null);
     }
 }
 
@@ -283,17 +284,31 @@ static void GatewayFallbackDownstreamToDockerHostWhenComposeDnsMissing()
     if (GatewayTryResolveHost("identity-service"))
         return;
 
-    var fallbackHost = Environment.GetEnvironmentVariable("SIMCAG_FALLBACK_HOST")?.Trim();
-    if (string.IsNullOrEmpty(fallbackHost))
-        fallbackHost = "host.docker.internal";
+    var fallbackHost = GatewayResolveFallbackHostForHostPublishedPorts();
 
     foreach (var row in GatewayDownstreamUrlSynthesis.Rows)
         Environment.SetEnvironmentVariable(row.Primary, $"http://{fallbackHost}:{row.DefaultPort}");
 
     Console.WriteLine(
         "[Simcag.Gateway] identity-service não resolve neste contentor — a usar http://" + fallbackHost
-        + ":5001–5008 para downstream (APIs no host). Em stack Compose com DNS interno, defina "
-        + "SIMCAG_DISABLE_HOST_PORT_FALLBACK=1 ou URLs em SERVICES__*__URL.");
+        + ":5001–5008 (APIs no host). Rede não-default / rootless: defina SIMCAG_FALLBACK_HOST. "
+        + "Compose com DNS: SIMCAG_DISABLE_HOST_PORT_FALLBACK=1 ou SERVICES__*__URL.");
+}
+
+/// <summary>
+/// Ordem: SIMCAG_FALLBACK_HOST; senão host.docker.internal se existir no DNS (Docker Desktop);
+/// senão 172.17.0.1 (gateway típico da bridge docker0 no Linux).
+/// </summary>
+static string GatewayResolveFallbackHostForHostPublishedPorts()
+{
+    var custom = Environment.GetEnvironmentVariable("SIMCAG_FALLBACK_HOST")?.Trim();
+    if (!string.IsNullOrEmpty(custom))
+        return custom;
+
+    if (GatewayTryResolveHost("host.docker.internal"))
+        return "host.docker.internal";
+
+    return "172.17.0.1";
 }
 
 static bool GatewayTryResolveHost(string hostname)
@@ -453,6 +468,10 @@ static void GatewayApplyDockerListenUrls(WebApplicationBuilder builder)
     if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
         return;
 
+    var urlsNow = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+    if (!string.IsNullOrWhiteSpace(urlsNow) && GatewayAspNetCoreUrlsUseAnyNetworkInterface(urlsNow))
+        return;
+
     var httpPorts = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
     if (string.IsNullOrWhiteSpace(httpPorts))
         return;
@@ -509,6 +528,47 @@ static bool AllAspNetCoreUrlSegmentsAreLoopback(string aspNetCoreUrls)
     }
 
     return true;
+}
+
+static bool GatewayAspNetCoreUrlsUseAnyNetworkInterface(string aspNetCoreUrls)
+{
+    foreach (var segment in aspNetCoreUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!Uri.TryCreate(segment, UriKind.Absolute, out var uri))
+            continue;
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+            continue;
+        return GatewayIsAcceptableListenHost(uri);
+    }
+
+    return false;
+}
+
+static int? GatewayParseFirstAspNetCoreHttpPort()
+{
+    var raw = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
+    if (string.IsNullOrWhiteSpace(raw))
+        return null;
+    var token = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+    return int.TryParse(token, out var p) && p > 0 ? p : null;
+}
+
+static int? GatewayFirstHttpListenPortFromLoopbackAspNetCoreUrls(string aspNetCoreUrls)
+{
+    foreach (var segment in aspNetCoreUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!Uri.TryCreate(segment, UriKind.Absolute, out var uri))
+            continue;
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+            continue;
+        if (!uri.IsLoopback)
+            return null;
+        if (uri.Port < 1)
+            continue;
+        return uri.Port;
+    }
+
+    return null;
 }
 
 file static class DevJwtSecretFallback
