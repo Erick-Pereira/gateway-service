@@ -1,74 +1,44 @@
-version: '3.8'
+# =============================================================================
+# Gateway apenas — cada microserviço (Identity, Ingestion, …) corre noutro
+# contentor/imagem; este compose NÃO os inclui.
+#
+# Rede partilhada (opcional): crie uma rede e use-a em todos os stacks para DNS
+# entre contentores, ex.:
+#   docker network create simcag_net
+#   Em cada compose: networks → default → external: true, name: simcag_net
+# =============================================================================
 
 services:
   gateway-service:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Simcag.Gateway.Api/Dockerfile
+    image: simcag/gateway-service:latest
     container_name: simcag-gateway-service
     ports:
-      - "8080:8080"
+      # host:contentor — dentro do contentor a API escuta na porta ASPNETCORE_HTTP_PORTS (8080)
+      - "5000:8080"
     environment:
-      - IDENTITY_SERVICE_URL=http://identity-service:5000
-      - REDIS_CONNECTION=redis:6379
-      - RATE_LIMIT_REQUESTS=100
-      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
-    depends_on:
-      - redis
-      - identity-service
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_URLS: http://+:8080
+      DOTNET_RUNNING_IN_CONTAINER: "true"
+      JWT__ISSUER: Simcag.IdentityService
+      JWT__AUDIENCE: Simcag.Clients
+      JWT__SECRET: ${JWT_SECRET:-Simcag.Dev.Jwt.NotForProduction.AlignWithIdentityService.01!}
+      # Não uses SERVICES__*__URL=http://localhost:… aqui: no contentor localhost és o próprio gateway.
+      # Com rede partilhada e serviços com nomes identity-service, … omita SERVICES__* (defaults no código).
+      # APIs só no host: SIMCAG_SERVICES_HOST / SIMCAG_FALLBACK_HOST — ver Simcag.Gateway.Api/.env.example
     networks:
-      - simcag-network
+      - simcag_net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "p=\"$${ASPNETCORE_HTTP_PORTS:-8080}\"; p=\"$${p%%,*}\"; curl -fsS \"http://localhost:$${p}/health/live\" >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "p=\"$${ASPNETCORE_HTTP_PORTS:-8080}\"; p=\"$${p%%,*}\"; curl -fsS \"http://127.0.0.1:$${p}/health/live\" >/dev/null || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 8s
       retries: 3
-      start_period: 10s
-
-  identity-service:
-    image: simcag/identity-service:latest
-    container_name: simcag-identity-service
-    ports:
-      - "5000:5000"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=Simcag;Username=postgres;Password=postgres
-    depends_on:
-      - db
-    networks:
-      - simcag-network
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: simcag-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
-    networks:
-      - simcag-network
-    restart: unless-stopped
-
-  db:
-    image: postgres:15-alpine
-    container_name: simcag-postgres
-    environment:
-      - POSTGRES_DB=Simcag
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - simcag-network
-    restart: unless-stopped
-
-volumes:
-  redis-data:
-  postgres-data:
+      start_period: 25s
 
 networks:
-  simcag-network:
+  simcag_net:
     driver: bridge
