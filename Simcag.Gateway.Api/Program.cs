@@ -38,6 +38,9 @@ if (string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINE
 
 var builder = WebApplication.CreateBuilder(args);
 GatewayApplyDockerListenUrls(builder);
+GatewayRewriteLoopbackDownstreamServiceEnvarsInContainer();
+GatewaySynthesizeDownstreamServiceUrlsFromHostAndPorts();
+GatewayWarnIfMisconfiguredDownstreamLoopbackInContainer();
 
 static string? GetEnv(params string[] keys)
 {
@@ -58,6 +61,9 @@ var notificationServiceUrl  = GetEnv("SERVICES__NOTIFICATION__URL",  "NOTIFICATI
 var priceAnalysisServiceUrl = GetEnv("SERVICES__PRICE_ANALYSIS__URL","PRICE_ANALYSIS_SERVICE_URL")?? "http://price-analysis-service:8086";
 var marketDataServiceUrl    = GetEnv("SERVICES__MARKET_DATA__URL",   "MARKET_DATA_SERVICE_URL")   ?? "http://market-data-service:8085";
 var aiServiceUrl            = GetEnv("SERVICES__AI__URL",            "AI_SERVICE_URL")            ?? "http://ai-service:8087";
+
+GatewayLogImplicitDownstreamResolutionMode();
+
 var redisForCache = DependencyInjection.GetRedisCacheConnection();
 var useInMemoryCache = DependencyInjection.IsInProcessDistributedCache(redisForCache);
 
@@ -221,6 +227,174 @@ app.MapReverseProxy();
 
 app.Run();
 
+/// <summary>
+/// Em container, URLs com localhost apontam para o próprio gateway. Se SIMCAG_DOWNSTREAM_HOST (ou GATEWAY_DOWNSTREAM_HOST)
+/// estiver definido (ex.: host.docker.internal, nome DNS do host, IP da bridge), reescreve todas as variáveis de destino
+/// usadas pelo YARP e pelos health checks downstream.
+/// </summary>
+static void GatewayRewriteLoopbackDownstreamServiceEnvarsInContainer()
+{
+    if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    var replacementHost = (Environment.GetEnvironmentVariable("SIMCAG_DOWNSTREAM_HOST")
+        ?? Environment.GetEnvironmentVariable("GATEWAY_DOWNSTREAM_HOST"))?.Trim();
+    if (string.IsNullOrEmpty(replacementHost))
+        return;
+
+    if (Uri.TryCreate($"http://{replacementHost}/", UriKind.Absolute, out var probe) && probe.IsLoopback)
+        return;
+
+    foreach (var key in GatewayDownstreamEnvKeys.All)
+    {
+        var v = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(v))
+            continue;
+        if (!GatewayTryReplaceLoopbackHostInBaseUrl(v.Trim(), replacementHost, out var rewritten))
+            continue;
+        Environment.SetEnvironmentVariable(key, rewritten);
+    }
+}
+
+static void GatewayWarnIfMisconfiguredDownstreamLoopbackInContainer()
+{
+    if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SIMCAG_SERVICES_HOST"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SIMCAG_DOWNSTREAM_HOST"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GATEWAY_DOWNSTREAM_HOST")))
+        return;
+
+    foreach (var key in GatewayDownstreamEnvKeys.PrimaryServices)
+    {
+        var v = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(v))
+            continue;
+        if (!Uri.TryCreate(v.Trim(), UriKind.Absolute, out var uri) || !uri.IsLoopback)
+            continue;
+
+        Console.WriteLine(
+            "[Simcag.Gateway] Em container, " + key + " usa localhost — isso aponta para o próprio gateway. " +
+            "Defina SIMCAG_SERVICES_HOST ou SIMCAG_DOWNSTREAM_HOST (hostname alcançável), " +
+            "ou URLs completas em SERVICES__*__URL, ou SIMCAG_SERVICES_HOST (mapa de portas dev 5001–5008).");
+        return;
+    }
+}
+
+static bool GatewayTryReplaceLoopbackHostInBaseUrl(string url, string newHost, out string? rewritten)
+{
+    rewritten = null;
+    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        return false;
+    if (!uri.IsLoopback)
+        return false;
+
+    var builder = new UriBuilder(uri) { Host = newHost };
+    rewritten = builder.Uri.ToString().TrimEnd('/');
+    return true;
+}
+
+/// <summary>
+/// Preenche SERVICES__*__URL em falta com {SIMCAG_SERVICES_SCHEME}://{host}:{porta}.
+/// Host: SIMCAG_SERVICES_HOST, senão SIMCAG_DOWNSTREAM_HOST / GATEWAY_DOWNSTREAM_HOST;
+/// fora de contentor em Development, default localhost. Em contentor, é obrigatório definir um host alcançável.
+/// Portas no modo host único: mapa fixo dev 5001–5008 (simcag/.env.example). Em Docker na rede Compose, omita URLs e use os defaults do código (identity-service:8080, …).
+/// </summary>
+static void GatewaySynthesizeDownstreamServiceUrlsFromHostAndPorts()
+{
+    var inContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase);
+    var aspNetEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+    var isDevelopment = string.IsNullOrWhiteSpace(aspNetEnv)
+        || string.Equals(aspNetEnv, "Development", StringComparison.OrdinalIgnoreCase);
+
+    var host = (Environment.GetEnvironmentVariable("SIMCAG_SERVICES_HOST")
+        ?? Environment.GetEnvironmentVariable("SIMCAG_DOWNSTREAM_HOST")
+        ?? Environment.GetEnvironmentVariable("GATEWAY_DOWNSTREAM_HOST"))?.Trim();
+
+    if (string.IsNullOrEmpty(host))
+    {
+        if (inContainer || !isDevelopment)
+            return;
+        host = "localhost";
+    }
+
+    var scheme = GatewayNormalizeServicesScheme();
+
+    foreach (var row in GatewayDownstreamUrlSynthesis.Rows)
+    {
+        if (GatewaySynthesisRowHasAbsoluteUrl(row))
+            continue;
+
+        var url = $"{scheme}://{host}:{row.DefaultPort}";
+        Environment.SetEnvironmentVariable(row.Primary, url);
+    }
+}
+
+static bool GatewaySynthesisRowHasAbsoluteUrl((string Primary, int DefaultPort, string[] UrlKeys) row)
+{
+    if (GatewayEnvLooksLikeAbsoluteUrl(Environment.GetEnvironmentVariable(row.Primary)))
+        return true;
+    foreach (var k in row.UrlKeys)
+    {
+        if (GatewayEnvLooksLikeAbsoluteUrl(Environment.GetEnvironmentVariable(k)))
+            return true;
+    }
+
+    return false;
+}
+
+static bool GatewayEnvLooksLikeAbsoluteUrl(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+        return false;
+    var t = value.Trim();
+    return t.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+        || t.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// O YARP faz de reverse proxy HTTP para estes destinos. Os nomes identity-service, … só resolvem
+/// se existirem contentores com esses nomes na mesma rede Docker (típico docker compose). Um único
+/// contentor gateway na bridge por defeito não vê esses DNS — use SIMCAG_SERVICES_HOST ou SERVICES__*__URL.
+/// </summary>
+static void GatewayLogImplicitDownstreamResolutionMode()
+{
+    if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SIMCAG_SERVICES_HOST")))
+        return;
+
+    foreach (var key in GatewayDownstreamEnvKeys.All)
+    {
+        if (GatewayEnvLooksLikeAbsoluteUrl(Environment.GetEnvironmentVariable(key)))
+            return;
+    }
+
+    Console.WriteLine(
+        "[Simcag.Gateway] Nenhuma URL downstream nas variáveis de ambiente: a usar os defaults do código " +
+        "(http://identity-service:8080, http://ingestion-service:8081, …). Isto só funciona na mesma rede " +
+        "que esses contentores (ex.: stack Compose). Se só corre o gateway, defina SIMCAG_SERVICES_HOST " +
+        "(ex.: host.docker.internal) ou SERVICES__*__URL com endereços alcançáveis.");
+}
+
+static string GatewayNormalizeServicesScheme()
+{
+    var s = Environment.GetEnvironmentVariable("SIMCAG_SERVICES_SCHEME")?.Trim();
+    if (string.IsNullOrEmpty(s))
+        return "http";
+    if (s.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        return "https";
+    if (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        return "http";
+    if (s.Equals("https", StringComparison.OrdinalIgnoreCase))
+        return "https";
+    if (s.Equals("http", StringComparison.OrdinalIgnoreCase))
+        return "http";
+    return "http";
+}
+
 static void GatewayApplyDockerListenUrls(WebApplicationBuilder builder)
 {
     if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
@@ -288,4 +462,48 @@ file static class DevJwtSecretFallback
 {
     // Manter o literal idêntico em identity-service/Simcag.IdentityService.Api/Program.cs (só Development).
     public const string Value = "Simcag.Dev.Jwt.NotForProduction.AlignWithIdentityService.01!";
+}
+
+/// <summary>Chaves consultadas por YarpConfig.ClusterAddress (precedência entre chaves não importa para o rewrite).</summary>
+file static class GatewayDownstreamUrlSynthesis
+{
+    /// <summary>Primary URL env, port override env, default dev port, aliases checked antes de sintetizar.</summary>
+    public static readonly (string Primary, int DefaultPort, string[] UrlKeys)[] Rows =
+    [
+        ("SERVICES__IDENTITY__URL", 5001, ["IDENTITY_SERVICE_URL", "GATEWAY_IDENTITY_ADDRESS"]),
+        ("SERVICES__INGESTION__URL", 5002, ["INGESTION_SERVICE_URL", "GATEWAY_INGESTION_ADDRESS"]),
+        ("SERVICES__PROCESSING__URL", 5003, ["PROCESSING_SERVICE_URL", "GATEWAY_PROCESSING_ADDRESS"]),
+        ("SERVICES__ALERT__URL", 5004, ["ALERT_SERVICE_URL", "GATEWAY_ALERT_ADDRESS"]),
+        ("SERVICES__NOTIFICATION__URL", 5005, ["NOTIFICATION_SERVICE_URL", "GATEWAY_NOTIFICATION_ADDRESS"]),
+        ("SERVICES__PRICE_ANALYSIS__URL", 5006, ["PRICE_ANALYSIS_SERVICE_URL", "GATEWAY_PRICE_ANALYSIS_ADDRESS"]),
+        ("SERVICES__MARKET_DATA__URL", 5007, ["MARKET_DATA_SERVICE_URL", "GATEWAY_MARKET_DATA_ADDRESS"]),
+        ("SERVICES__AI__URL", 5008, ["AI_SERVICE_URL", "GATEWAY_AI_ADDRESS"]),
+    ];
+}
+
+file static class GatewayDownstreamEnvKeys
+{
+    public static readonly string[] All =
+    [
+        "SERVICES__IDENTITY__URL", "IDENTITY_SERVICE_URL", "GATEWAY_IDENTITY_ADDRESS",
+        "SERVICES__INGESTION__URL", "INGESTION_SERVICE_URL", "GATEWAY_INGESTION_ADDRESS",
+        "SERVICES__ALERT__URL", "ALERT_SERVICE_URL", "GATEWAY_ALERT_ADDRESS",
+        "SERVICES__NOTIFICATION__URL", "NOTIFICATION_SERVICE_URL", "GATEWAY_NOTIFICATION_ADDRESS",
+        "SERVICES__PROCESSING__URL", "PROCESSING_SERVICE_URL", "GATEWAY_PROCESSING_ADDRESS",
+        "SERVICES__PRICE_ANALYSIS__URL", "PRICE_ANALYSIS_SERVICE_URL", "GATEWAY_PRICE_ANALYSIS_ADDRESS",
+        "SERVICES__MARKET_DATA__URL", "MARKET_DATA_SERVICE_URL", "GATEWAY_MARKET_DATA_ADDRESS",
+        "SERVICES__AI__URL", "AI_SERVICE_URL", "GATEWAY_AI_ADDRESS",
+    ];
+
+    public static readonly string[] PrimaryServices =
+    [
+        "SERVICES__IDENTITY__URL",
+        "SERVICES__INGESTION__URL",
+        "SERVICES__ALERT__URL",
+        "SERVICES__NOTIFICATION__URL",
+        "SERVICES__PROCESSING__URL",
+        "SERVICES__PRICE_ANALYSIS__URL",
+        "SERVICES__MARKET_DATA__URL",
+        "SERVICES__AI__URL",
+    ];
 }
