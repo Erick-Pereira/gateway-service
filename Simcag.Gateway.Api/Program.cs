@@ -134,21 +134,45 @@ var health = builder.Services.AddHealthChecks();
 if (!useInMemoryCache && !string.IsNullOrEmpty(redisForCache))
     health.AddRedis(redisForCache, name: "redis");
 
-// Downstream health checks — Degraded (não Unhealthy) para que o gateway retorne 200
-// mesmo com serviços offline. Em produção use dashboards de observabilidade.
-static void AddDownstream(IHealthChecksBuilder b, string url, string name)
-    => b.AddUrlGroup(new Uri($"{url}/health"), name: name,
-           failureStatus: Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded,
-           tags: ["downstream"]);
+// Downstream health checks — Degraded; timeout curto para /health não bloquear ~10s por URI (default do HttpClient).
+static TimeSpan GatewayDownstreamHealthCheckTimeout()
+{
+    var raw = Environment.GetEnvironmentVariable("GATEWAY_DOWNSTREAM_HEALTH_TIMEOUT_SECONDS");
+    if (int.TryParse(raw, out var sec) && sec > 0 && sec <= 120)
+        return TimeSpan.FromSeconds(sec);
+    return TimeSpan.FromSeconds(3);
+}
 
-AddDownstream(health, identityServiceUrl,      "identity-service");
-AddDownstream(health, ingestionServiceUrl,     "ingestion-service");
-AddDownstream(health, processingServiceUrl,    "processing-service");
-AddDownstream(health, alertServiceUrl,         "alert-service");
-AddDownstream(health, notificationServiceUrl,  "notification-service");
-AddDownstream(health, priceAnalysisServiceUrl, "price-analysis-service");
-AddDownstream(health, marketDataServiceUrl,    "market-data-service");
-AddDownstream(health, aiServiceUrl,            "ai-service");
+static bool GatewaySkipDownstreamHealthChecks()
+{
+    var v = Environment.GetEnvironmentVariable("GATEWAY_SKIP_DOWNSTREAM_HEALTH");
+    return string.Equals(v, "1", StringComparison.Ordinal)
+        || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase);
+}
+
+static void AddDownstream(IHealthChecksBuilder b, string url, string name)
+{
+    var t = GatewayDownstreamHealthCheckTimeout();
+    b.AddUrlGroup(
+        new Uri($"{url.TrimEnd('/')}/health"),
+        name: name,
+        failureStatus: Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded,
+        tags: ["downstream"],
+        timeout: t,
+        configureClient: (_, client) => client.Timeout = t);
+}
+
+if (!GatewaySkipDownstreamHealthChecks())
+{
+    AddDownstream(health, identityServiceUrl,      "identity-service");
+    AddDownstream(health, ingestionServiceUrl,     "ingestion-service");
+    AddDownstream(health, processingServiceUrl,    "processing-service");
+    AddDownstream(health, alertServiceUrl,         "alert-service");
+    AddDownstream(health, notificationServiceUrl,  "notification-service");
+    AddDownstream(health, priceAnalysisServiceUrl, "price-analysis-service");
+    AddDownstream(health, marketDataServiceUrl,    "market-data-service");
+    AddDownstream(health, aiServiceUrl,            "ai-service");
+}
 
 // Swagger (Swashbuckle 10.x + Microsoft.OpenApi 2.x — API delegada)
 builder.Services.AddEndpointsApiExplorer();
