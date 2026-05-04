@@ -40,6 +40,7 @@ var builder = WebApplication.CreateBuilder(args);
 GatewayApplyDockerListenUrls(builder);
 GatewayRewriteLoopbackDownstreamServiceEnvarsInContainer();
 GatewaySynthesizeDownstreamServiceUrlsFromHostAndPorts();
+GatewayFallbackDownstreamToDockerHostWhenComposeDnsMissing();
 GatewayWarnIfMisconfiguredDownstreamLoopbackInContainer();
 
 static string? GetEnv(params string[] keys)
@@ -253,6 +254,58 @@ static void GatewayRewriteLoopbackDownstreamServiceEnvarsInContainer()
         if (!GatewayTryReplaceLoopbackHostInBaseUrl(v.Trim(), replacementHost, out var rewritten))
             continue;
         Environment.SetEnvironmentVariable(key, rewritten);
+    }
+}
+
+/// <summary>
+/// Contentor só na bridge: identity-service não existe no DNS → os defaults *-service:808x falham.
+/// Se nenhuma URL downstream estiver definida e identity-service não resolver, assume APIs publicadas
+/// no host (portas 5001–5008) via SIMCAG_FALLBACK_HOST (default host.docker.internal).
+/// </summary>
+static void GatewayFallbackDownstreamToDockerHostWhenComposeDnsMissing()
+{
+    if (!string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    if (string.Equals(Environment.GetEnvironmentVariable("SIMCAG_DISABLE_HOST_PORT_FALLBACK"), "1", StringComparison.Ordinal)
+        || string.Equals(Environment.GetEnvironmentVariable("SIMCAG_DISABLE_HOST_PORT_FALLBACK"), "true", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SIMCAG_SERVICES_HOST")))
+        return;
+
+    foreach (var key in GatewayDownstreamEnvKeys.All)
+    {
+        if (GatewayEnvLooksLikeAbsoluteUrl(Environment.GetEnvironmentVariable(key)))
+            return;
+    }
+
+    if (GatewayTryResolveHost("identity-service"))
+        return;
+
+    var fallbackHost = Environment.GetEnvironmentVariable("SIMCAG_FALLBACK_HOST")?.Trim();
+    if (string.IsNullOrEmpty(fallbackHost))
+        fallbackHost = "host.docker.internal";
+
+    foreach (var row in GatewayDownstreamUrlSynthesis.Rows)
+        Environment.SetEnvironmentVariable(row.Primary, $"http://{fallbackHost}:{row.DefaultPort}");
+
+    Console.WriteLine(
+        "[Simcag.Gateway] identity-service não resolve neste contentor — a usar http://" + fallbackHost
+        + ":5001–5008 para downstream (APIs no host). Em stack Compose com DNS interno, defina "
+        + "SIMCAG_DISABLE_HOST_PORT_FALLBACK=1 ou URLs em SERVICES__*__URL.");
+}
+
+static bool GatewayTryResolveHost(string hostname)
+{
+    try
+    {
+        _ = System.Net.Dns.GetHostEntry(hostname);
+        return true;
+    }
+    catch
+    {
+        return false;
     }
 }
 
