@@ -37,7 +37,10 @@ Dockerfile
 docker-compose.yml
 .dockerignore
 
-# Environment files
+# Environment files (any subfolder — evita .env de dev no COPY Simcag.Gateway.Api/)
+**/.env
+**/.env.local
+**/.env.*.local
 .env
 .env.local
 .env.*.local

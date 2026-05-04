@@ -12,7 +12,8 @@ using DotNetEnv;
 using Microsoft.AspNetCore.Hosting;
 using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMiddleware;
 
-DotNetEnv.Env.Load();
+// Não sobrescrever variáveis já definidas (Docker/Portainer): .env local é só fallback.
+DotNetEnv.Env.NoClobber().Load();
 
 // Docker: alinhar com Simcag.Shared.Hosting.ContainerListenConfiguration (gateway não referencia Shared).
 if (string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase))
