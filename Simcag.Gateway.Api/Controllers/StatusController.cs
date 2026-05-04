@@ -5,8 +5,9 @@ namespace Simcag.Gateway.Api.Controllers;
 
 /// <summary>
 /// Controller para health checks e status do serviço.
-/// - GET /health  → 200 Healthy | 200 Degraded (downstream offline) | 503 Unhealthy (gateway em si com problema)
-/// - GET /info    → metadados do serviço
+/// - GET /health      → inclui downstreams (pode demorar vários segundos)
+/// - GET /health/live → só o processo gateway (+ Redis se configurado); para Docker HEALTHCHECK
+/// - GET /info        → metadados do serviço
 /// </summary>
 [ApiController]
 [Route("")]

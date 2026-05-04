@@ -9,6 +9,7 @@ using Simcag.Gateway.Infrastructure.Configuration;
 using Simcag.Gateway.Infrastructure.Middleware;
 using Simcag.Gateway.Api.Middleware;
 using DotNetEnv;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Hosting;
 using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMiddleware;
 
@@ -247,6 +248,12 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Liveness para Docker HEALTHCHECK: sem probes HTTP aos downstreams (evita timeout 3s do Docker vs /health ~3s+).
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags is null || !registration.Tags.Contains("downstream"),
+});
 
 // YARP Proxy
 app.MapReverseProxy();
