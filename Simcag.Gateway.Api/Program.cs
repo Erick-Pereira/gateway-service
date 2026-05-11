@@ -208,36 +208,29 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// Middleware pipeline
-if (app.Environment.IsDevelopment())
+// Middleware pipeline — única UI HTTP: Swagger (sem wwwroot / index.html que interceptavam pedidos).
+app.UseSwagger();
+app.UseSwaggerUI(options =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(options =>
-    {
-        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Gateway");
-        // Documentos OpenAPI dos serviços downstream (proxy em /api/<serviço>-docs/... → /swagger/v1/swagger.json).
-        options.SwaggerEndpoint("/api/identity-docs/swagger/v1/swagger.json", "Identity");
-        options.SwaggerEndpoint("/api/ingestion-docs/swagger/v1/swagger.json", "Ingestion");
-        options.SwaggerEndpoint("/api/processing-docs/swagger/v1/swagger.json", "Processing");
-        options.SwaggerEndpoint("/api/alert-docs/swagger/v1/swagger.json", "Alert");
-        options.SwaggerEndpoint("/api/notification-docs/swagger/v1/swagger.json", "Notification");
-        options.SwaggerEndpoint("/api/price-analysis-docs/swagger/v1/swagger.json", "Price Analysis");
-        options.SwaggerEndpoint("/api/market-data-docs/swagger/v1/swagger.json", "Market Data");
-        options.SwaggerEndpoint("/api/ai-docs/swagger/v1/swagger.json", "IA (AI Service)");
-        options.RoutePrefix = "swagger";
-        options.DocumentTitle = "SIMC-AG Gateway — Swagger";
-    });
-}
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "Gateway");
+    // Documentos OpenAPI dos serviços downstream (proxy em /api/<serviço>-docs/... → /swagger/v1/swagger.json).
+    options.SwaggerEndpoint("/api/identity-docs/swagger/v1/swagger.json", "Identity");
+    options.SwaggerEndpoint("/api/ingestion-docs/swagger/v1/swagger.json", "Ingestion");
+    options.SwaggerEndpoint("/api/processing-docs/swagger/v1/swagger.json", "Processing");
+    options.SwaggerEndpoint("/api/alert-docs/swagger/v1/swagger.json", "Alert");
+    options.SwaggerEndpoint("/api/notification-docs/swagger/v1/swagger.json", "Notification");
+    options.SwaggerEndpoint("/api/price-analysis-docs/swagger/v1/swagger.json", "Price Analysis");
+    options.SwaggerEndpoint("/api/market-data-docs/swagger/v1/swagger.json", "Market Data");
+    options.SwaggerEndpoint("/api/ai-docs/swagger/v1/swagger.json", "IA (AI Service)");
+    options.RoutePrefix = "swagger";
+    options.DocumentTitle = "SIMC-AG Gateway — Swagger";
+});
 
 app.UseRouting();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseMiddleware<RateLimitingMiddleware>();
-
-// Arquivos estáticos (wwwroot) e "/" → index.html — deve vir antes do middleware de autenticação
-app.UseDefaultFiles();
-app.UseStaticFiles();
 
 app.UseMiddleware<AuthenticationMiddleware>();
 app.UseMiddleware<AuthZMiddleware>();

@@ -29,22 +29,33 @@ public static class YarpConfig
             {
                 RouteId = "ingestion-route",
                 ClusterId = "ingestion-cluster",
-                Match = new RouteMatch { Path = "/api/ingestion/{**catch-all}" },
-                Transforms = new[] { new Dictionary<string, string> { { "PathRemovePrefix", "/api/ingestion" } } }
+                Match = new RouteMatch { Path = "/api/ingestion/{**catch-all}" }
             },
             new RouteConfig
             {
                 RouteId = "alert-route",
                 ClusterId = "alert-cluster",
-                Match = new RouteMatch { Path = "/api/alerts/{**catch-all}" },
-                Transforms = new[] { new Dictionary<string, string> { { "PathRemovePrefix", "/api/alerts" } } }
+                Match = new RouteMatch { Path = "/api/alerts/{**catch-all}" }
+            },
+            // ASP.NET [Route("api/[controller]")] → PascalCase (AlertRulesController, AlertsController).
+            // O match do YARP é sensível à capitalização: sem estes aliases, /api/AlertRules e /api/Alerts ficam 404 no gateway.
+            new RouteConfig
+            {
+                RouteId = "alert-rules-route",
+                ClusterId = "alert-cluster",
+                Match = new RouteMatch { Path = "/api/AlertRules/{**catch-all}" }
+            },
+            new RouteConfig
+            {
+                RouteId = "alerts-pascal-route",
+                ClusterId = "alert-cluster",
+                Match = new RouteMatch { Path = "/api/Alerts/{**catch-all}" }
             },
             new RouteConfig
             {
                 RouteId = "notification-route",
                 ClusterId = "notification-cluster",
-                Match = new RouteMatch { Path = "/api/notifications/{**catch-all}" },
-                Transforms = new[] { new Dictionary<string, string> { { "PathRemovePrefix", "/api/notifications" } } }
+                Match = new RouteMatch { Path = "/api/notifications/{**catch-all}" }
             },
             new RouteConfig
             {
@@ -114,9 +125,21 @@ public static class YarpConfig
             },
             new RouteConfig
             {
+                RouteId = "price-analysis-pascal-route",
+                ClusterId = "price-analysis-cluster",
+                Match = new RouteMatch { Path = "/api/PriceAnalysis/{**catch-all}" }
+            },
+            new RouteConfig
+            {
                 RouteId = "market-data-route",
                 ClusterId = "market-data-cluster",
                 Match = new RouteMatch { Path = "/api/market-data/{**catch-all}" }
+            },
+            new RouteConfig
+            {
+                RouteId = "market-data-pascal-route",
+                ClusterId = "market-data-cluster",
+                Match = new RouteMatch { Path = "/api/MarketData/{**catch-all}" }
             },
             new RouteConfig
             {
