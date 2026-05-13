@@ -37,6 +37,13 @@ public class AuthenticationMiddleware : IMiddleware
 
         if (IsPublicPath(path))
         {
+            // Rotas públicas: browsers costumam enviar Bearer antigo (localStorage). O JwtBearer
+            // (UseAuthentication) valida qualquer Authorization presente e falha com token expirado
+            // antes do proxy — e o Identity pode devolver 500/401 indevidos no lookup anónimo.
+            // Exceção: /api/auth/validate precisa do header para o controller inspecionar o JWT.
+            if (!path.StartsWith("/api/auth/validate", StringComparison.OrdinalIgnoreCase))
+                context.Request.Headers.Remove("Authorization");
+
             await next(context);
             return;
         }

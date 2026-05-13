@@ -37,19 +37,13 @@ public static class YarpConfig
                 ClusterId = "alert-cluster",
                 Match = new RouteMatch { Path = "/api/alerts/{**catch-all}" }
             },
-            // ASP.NET [Route("api/[controller]")] → PascalCase (AlertRulesController, AlertsController).
-            // O match do YARP é sensível à capitalização: sem estes aliases, /api/AlertRules e /api/Alerts ficam 404 no gateway.
+            // ASP.NET [Route("api/[controller]")] → template api/Alerts; o host aceita /api/alerts (case-insensitive).
+            // Não duplicar api/Alerts no YARP — gera AmbiguousMatchException para GET /api/alerts.
             new RouteConfig
             {
                 RouteId = "alert-rules-route",
                 ClusterId = "alert-cluster",
                 Match = new RouteMatch { Path = "/api/AlertRules/{**catch-all}" }
-            },
-            new RouteConfig
-            {
-                RouteId = "alerts-pascal-route",
-                ClusterId = "alert-cluster",
-                Match = new RouteMatch { Path = "/api/Alerts/{**catch-all}" }
             },
             new RouteConfig
             {
