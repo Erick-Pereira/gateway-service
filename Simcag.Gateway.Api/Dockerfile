@@ -1,7 +1,20 @@
+# Contexto: raiz do gateway-service (repo standalone ou pasta no monorepo).
+# Simcag.Shared: GitHub Packages — passar build-args TOKEN (PAT read:packages) e NUGET_GITHUB_OWNER.
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS builder
 WORKDIR /src
 
 ARG BUILD_CONFIGURATION=Release
+ARG TOKEN
+ARG NUGET_GITHUB_OWNER
+
+RUN if [ -n "${TOKEN:-}" ] && [ -n "${NUGET_GITHUB_OWNER:-}" ]; then \
+    dotnet nuget add source "https://nuget.pkg.github.com/${NUGET_GITHUB_OWNER}/index.json" \
+      --name github \
+      --username "${NUGET_GITHUB_OWNER}" \
+      --password "${TOKEN}" \
+      --store-password-in-clear-text; \
+  fi
 
 COPY ["Simcag.Gateway.Api/Simcag.Gateway.Api.csproj", "Simcag.Gateway.Api/"]
 COPY ["Simcag.Gateway.Application/Simcag.Gateway.Application.csproj", "Simcag.Gateway.Application/"]
