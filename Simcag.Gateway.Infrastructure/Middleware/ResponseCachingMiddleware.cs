@@ -38,6 +38,30 @@ public class ResponseCachingMiddleware
         path.Contains("/swagger/", StringComparison.OrdinalIgnoreCase)
         || path.EndsWith("/swagger.json", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// GETs que mudam com ingestão / writes — não cachear mesmo que
+    /// <c>GATEWAY_RESPONSE_CACHE_PREFIXES</c> inclua um prefixo largo (ex.: <c>/api</c>).
+    /// </summary>
+    private static readonly string[] AlwaysBypassGatewayResponseCachePrefixes =
+    {
+        "/api/expenses",
+        "/api/ingestion",
+        "/api/dashboard",
+        "/api/compliance",
+        "/api/payments",
+        "/api/products",
+        "/api/suppliers",
+        "/api/condominios",
+        "/api/alerts",
+        "/api/AlertRules",
+        "/api/notifications",
+        "/api/audit-logs",
+    };
+
+    private static bool IsAlwaysBypassGatewayResponseCache(string path) =>
+        AlwaysBypassGatewayResponseCachePrefixes.Any(p =>
+            path.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+
     public async Task InvokeAsync(HttpContext context)
     {
         var path = context.Request.Path.Value ?? string.Empty;
@@ -46,6 +70,13 @@ public class ResponseCachingMiddleware
             || NoCachePrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))
             || IsDocProxyPath(path))
         {
+            await _next(context);
+            return;
+        }
+
+        if (IsAlwaysBypassGatewayResponseCache(path))
+        {
+            ApplyNoStoreHeaders(context.Response);
             await _next(context);
             return;
         }
