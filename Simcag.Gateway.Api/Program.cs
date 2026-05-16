@@ -11,6 +11,9 @@ using Simcag.Gateway.Api.Middleware;
 using DotNetEnv;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Options;
+using Simcag.Shared.Security;
+using Simcag.Shared.Telemetry;
 using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMiddleware;
 
 // Não sobrescrever variáveis já definidas (Docker/Portainer): .env local é só fallback.
@@ -39,6 +42,7 @@ if (string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINE
 }
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddSimcagDistributedTelemetry("Simcag.Gateway");
 GatewayApplyDockerListenUrls(builder);
 GatewayRewriteLoopbackDownstreamServiceEnvarsInContainer();
 GatewaySynthesizeDownstreamServiceUrlsFromHostAndPorts();
@@ -121,14 +125,27 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization(options =>
 {
-    // O AuthenticationMiddleware do gateway converte os roles do JWT (ex: "Admin")
-    // para o nome do enum (ex: "ADMIN") via Role.ToString(). As policies usam o nome do enum.
-    options.AddPolicy("AdminOnly", policy => policy.RequireRole("ADMIN"));
-    options.AddPolicy("SindicoOnly", policy => policy.RequireRole("SINDICO", "ADMIN"));
+    // JWT do Identity usa "Admin"/"Sindico"; o AuthService normaliza para os valores em <see cref="SimcagRoles"/>.
+    // Headers downstream (<c>X-User-Role</c>) usam o mesmo canónico (<c>Role.ToString()</c>).
+    options.AddPolicy("AdminOnly", policy => policy.RequireRole(SimcagRoles.Admin));
+    options.AddPolicy("SindicoOnly", policy => policy.RequireRole(SimcagRoles.Sindico, SimcagRoles.Admin));
 });
 
 // Infrastructure (Redis, HttpClient, Services, YARP)
 builder.Services.AddInfrastructure();
+
+static bool GatewayEnvTruthy(string? v) =>
+    string.Equals(v, "1", StringComparison.Ordinal)
+    || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase);
+
+builder.Services.Configure<GatewayTrustOptions>(o =>
+{
+    o.DownstreamHmacSecret = GetEnv("SIMCAG_GATEWAY_DOWNSTREAM_HMAC_SECRET", "GATEWAY_DOWNSTREAM_HMAC_SECRET");
+    o.RequireGatewayProof = GatewayEnvTruthy(Environment.GetEnvironmentVariable("SIMCAG_REQUIRE_GATEWAY_PROOF"));
+    var skew = Environment.GetEnvironmentVariable("SIMCAG_GATEWAY_PROOF_MAX_SKEW_SECONDS");
+    if (int.TryParse(skew, out var s) && s > 0)
+        o.MaxProofClockSkewSeconds = s;
+});
 
 // Health Checks (Redis só se estiver configurado; sem variável = cache em memória no AddInfrastructure)
 var health = builder.Services.AddHealthChecks();
@@ -208,6 +225,9 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Remove provas HMAC forjadas pelo cliente antes de JWT + recálculo no AuthenticationMiddleware.
+app.UseStripUntrustedGatewayProofHeaders();
+
 // Middleware pipeline — única UI HTTP: Swagger (sem wwwroot / index.html que interceptavam pedidos).
 app.UseSwagger();
 app.UseSwaggerUI(options =>
@@ -230,9 +250,10 @@ app.UseRouting();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
-app.UseMiddleware<RateLimitingMiddleware>();
-
+// Rate limit DEPOIS de validar JWT: antes `context.User` nunca estava autenticado e todo o tráfego
+// partilhava o mesmo bucket por IP (localhost, Docker, proxy) — 429 indevidos em uso normal.
 app.UseMiddleware<AuthenticationMiddleware>();
+app.UseMiddleware<RateLimitingMiddleware>();
 app.UseMiddleware<AuthZMiddleware>();
 app.UseMiddleware<ResponseCachingMiddleware>();
 app.UseMiddleware<ResponseFormatMiddleware>();
@@ -250,6 +271,8 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 
 // YARP Proxy
 app.MapReverseProxy();
+
+app.UseSimcagTelemetryEndpoints();
 
 app.Run();
 

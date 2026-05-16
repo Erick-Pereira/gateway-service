@@ -2,9 +2,10 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
+using Simcag.Gateway.Application.Interfaces;
 using Simcag.Gateway.Domain.Entities;
 using Simcag.Gateway.Domain.ValueObjects;
-using Simcag.Gateway.Application.Interfaces;
+using Simcag.Shared.Security;
 
 namespace Simcag.Gateway.Infrastructure.Middleware;
 
@@ -77,7 +78,7 @@ public class AuthService : IAuthService
             var displayName = !string.IsNullOrEmpty(name) ? name : email;
             var roleString = principal.FindFirst(ClaimTypes.Role)?.Value
                 ?? principal.FindAll("role").Select(c => c.Value).FirstOrDefault();
-            var tenantId = principal.FindFirst("tenant_id")?.Value ?? string.Empty;
+            var tenantId = principal.FindFirst(SimcagClaims.TenantId)?.Value ?? string.Empty;
             if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(roleString))
             {
                 _logger.LogWarning("Token sem sub ou role");

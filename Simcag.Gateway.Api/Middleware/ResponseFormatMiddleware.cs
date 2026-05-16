@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Simcag.Gateway.Infrastructure.Middleware;
 using System.Text.Json;
 
 namespace Simcag.Gateway.Api.Middleware;
@@ -52,15 +53,20 @@ public class ResponseFormatMiddleware
             && !string.IsNullOrEmpty(responseBodyText)
             && !responseBodyText.TrimStart().StartsWith("{\"success\"", StringComparison.OrdinalIgnoreCase))
         {
+            var correlationId = context.Request.Headers[CorrelationIdMiddleware.HeaderName].ToString();
             try
             {
+                object metadata = string.IsNullOrWhiteSpace(correlationId)
+                    ? new { timestamp = DateTime.UtcNow }
+                    : new { timestamp = DateTime.UtcNow, correlationId };
+
                 var formatted = new
                 {
                     success  = context.Response.StatusCode is >= 200 and < 300,
                     data     = JsonSerializer.Deserialize<object>(responseBodyText,
                                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }),
                     errors   = Array.Empty<string>(),
-                    metadata = new { Timestamp = DateTime.UtcNow }
+                    metadata
                 };
 
                 // Serializa para um stream separado para evitar truncagem do MemoryStream original.
@@ -74,9 +80,12 @@ public class ResponseFormatMiddleware
                 await formattedStream.CopyToAsync(originalBodyStream);
                 return;
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                // fallthrough: copia original abaixo
+                _logger.LogWarning(ex,
+                    "Gateway ResponseFormat: corpo não é JSON válido para encapsular; a devolver resposta original. CorrelationId={CorrelationId}, status={Status}",
+                    string.IsNullOrWhiteSpace(correlationId) ? "(none)" : correlationId,
+                    context.Response.StatusCode);
             }
         }
 

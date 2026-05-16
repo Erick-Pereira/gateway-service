@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using System.Diagnostics;
 
 namespace Simcag.Gateway.Infrastructure.Middleware;
 
@@ -19,6 +20,7 @@ public sealed class CorrelationIdMiddleware : IMiddleware
         }
 
         var correlationId = context.Request.Headers[HeaderName].ToString();
+        Activity.Current?.SetTag("simcag.correlation_id", correlationId);
         context.Response.OnStarting(() =>
         {
             if (!context.Response.Headers.ContainsKey(HeaderName))

@@ -76,6 +76,7 @@ public static class YarpConfig
                 RouteId = "processing-admin-refresh-dashboard-route",
                 ClusterId = "processing-cluster",
                 Match = new RouteMatch { Path = "/api/admin/refresh-dashboard" },
+                Order = -1,
                 AuthorizationPolicy = "AdminOnly"
             },
             new RouteConfig
@@ -100,9 +101,22 @@ public static class YarpConfig
             },
             new RouteConfig
             {
+                RouteId = "compliance-route",
+                ClusterId = "processing-cluster",
+                Match = new RouteMatch { Path = "/api/compliance/{**catch-all}" }
+            },
+            new RouteConfig
+            {
+                RouteId = "products-route",
+                ClusterId = "processing-cluster",
+                Match = new RouteMatch { Path = "/api/products/{**catch-all}" }
+            },
+            new RouteConfig
+            {
                 RouteId = "suppliers-merge-route",
                 ClusterId = "processing-cluster",
                 Match = new RouteMatch { Path = "/api/suppliers/merge" },
+                Order = -1,
                 AuthorizationPolicy = "AdminOnly"
             },
             new RouteConfig

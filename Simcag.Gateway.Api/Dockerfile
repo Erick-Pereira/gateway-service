@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS builder
 WORKDIR /src
 
 ARG BUILD_CONFIGURATION=Release
@@ -19,7 +19,7 @@ RUN dotnet publish "Simcag.Gateway.Api/Simcag.Gateway.Api.csproj" \
     /p:UseAppHost=false
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
 WORKDIR /app
 
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser

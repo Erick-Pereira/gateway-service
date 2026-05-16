@@ -1,3 +1,4 @@
+using Simcag.Gateway.Application.Authorization;
 using Simcag.Gateway.Application.Interfaces;
 using Simcag.Gateway.Domain.Entities;
 using Simcag.Gateway.Domain.ValueObjects;
@@ -18,15 +19,15 @@ public sealed class GatewayAccessEvaluator : IGatewayAccessEvaluator
                 return true;
         }
 
-        if (string.Equals(resource, "ingestion", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(resource, GatewayAccessResources.Ingestion, StringComparison.OrdinalIgnoreCase))
             return user.Role is Role.SINDICO;
 
-        if (string.Equals(resource, "admin", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(resource, GatewayAccessResources.Admin, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        if (string.Equals(resource, "alert", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(resource, "notification", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(resource, "report", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(resource, GatewayAccessResources.Alert, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(resource, GatewayAccessResources.Notification, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(resource, GatewayAccessResources.Report, StringComparison.OrdinalIgnoreCase))
             return user.Role is Role.SINDICO or Role.CONSELHO;
 
         return false;
