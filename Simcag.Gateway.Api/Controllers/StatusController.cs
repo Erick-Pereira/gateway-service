@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
@@ -8,22 +9,28 @@ namespace Simcag.Gateway.Api.Controllers;
 /// - GET /health      → inclui downstreams (pode demorar vários segundos)
 /// - GET /health/live → só o processo gateway (+ Redis se configurado); para Docker HEALTHCHECK
 /// - GET /info        → metadados do serviço
+/// 
+/// ⚠️ Tratamento de exceções: Usa IExceptionHandler global (RFC 7807) para evitar vazamento de detalhes.
 /// </summary>
 [ApiController]
 [Route("")]
 public class StatusController : ControllerBase
 {
     private readonly HealthCheckService _healthCheckService;
+    private readonly ILogger<StatusController> _logger;
 
-    public StatusController(HealthCheckService healthCheckService)
+    public StatusController(HealthCheckService healthCheckService, ILogger<StatusController> logger)
     {
         _healthCheckService = healthCheckService;
+        _logger = logger;
     }
 
     /// <summary>
     /// Health check do gateway.
     /// Retorna 200 quando saudável ou degraded (downstreams offline).
     /// Retorna 503 apenas quando o próprio gateway está unhealthy.
+    /// 
+    /// ⚠️ Erros são tratados pelo IExceptionHandler global (RFC 7807) - sem vazamento de detalhes.
     /// </summary>
     [HttpGet("health")]
     [ProducesResponseType(StatusCodes.Status200OK)]

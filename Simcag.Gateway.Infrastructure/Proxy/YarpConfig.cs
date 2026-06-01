@@ -87,6 +87,15 @@ public static class YarpConfig
                 AuthorizationPolicy = "AdminOnly",
                 Transforms = new[] { new Dictionary<string, string> { { "PathRemovePrefix", "/api/admin" } } }
             },
+            // Rota específica para lookup de condomínios (pública, sem auth)
+            new RouteConfig
+            {
+                RouteId = "condominios-lookup-route",
+                ClusterId = "admin-cluster",
+                Match = new RouteMatch { Path = "/api/condominios/lookup" },
+                Order = -1 // Processar antes de outras rotas
+            },
+            // Rota genérica para outros endpoints de condomínios (requer auth)
             new RouteConfig
             {
                 RouteId = "condominios-route",

@@ -8,10 +8,13 @@ using Serilog;
 using Simcag.Gateway.Infrastructure.Configuration;
 using Simcag.Gateway.Infrastructure.Middleware;
 using Simcag.Gateway.Api.Middleware;
+using Simcag.Gateway.Api; // Add namespace for static types if needed
 using DotNetEnv;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Options;
+using Simcag.Shared.ErrorHandling;
+using Simcag.Shared.Hosting;
 using Simcag.Shared.Security;
 using Simcag.Shared.Telemetry;
 using AuthZMiddleware = Simcag.Gateway.Infrastructure.Middleware.AuthorizationMiddleware;
@@ -81,8 +84,7 @@ if (string.IsNullOrWhiteSpace(jwtSecret))
     if (!builder.Environment.IsDevelopment())
         throw new InvalidOperationException("Defina JWT__SECRET (alinhado ao serviço Identity).");
     jwtSecret = DevJwtSecretFallback.Value;
-    Console.WriteLine(
-        "[Simcag.Gateway] JWT__SECRET ausente: a usar segredo fixo só para Development. Defina JWT__SECRET alinhado ao Identity fora de Development.");
+    Log.Information("[Simcag.Gateway] JWT__SECRET ausente: a usar segredo fixo só para Development. Defina JWT__SECRET alinhado ao Identity fora de Development.");
 }
 
 var jwtIssuer = GetEnv("JWT__ISSUER", "Jwt__Issuer") ?? "Simcag.IdentityService";
@@ -131,8 +133,14 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("SindicoOnly", policy => policy.RequireRole(SimcagRoles.Sindico, SimcagRoles.Admin));
 });
 
+builder.Services.AddSimcagProblemDetails();
+builder.Services.AddSimcagCors(builder.Environment);
+
 // Infrastructure (Redis, HttpClient, Services, YARP)
-builder.Services.AddInfrastructure();
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// Configurar DLQs após Redis (DLQ precisa do RabbitMQ que é configurado em AddInfrastructure)
+// builder.Services.AddGatewayDlq(builder.Configuration); // Desativado temporariamente
 
 static bool GatewayEnvTruthy(string? v) =>
     string.Equals(v, "1", StringComparison.Ordinal)
@@ -148,9 +156,9 @@ builder.Services.Configure<GatewayTrustOptions>(o =>
 });
 
 // Health Checks (Redis só se estiver configurado; sem variável = cache em memória no AddInfrastructure)
-var health = builder.Services.AddHealthChecks();
+var health = builder.Services.AddHealthChecks().AddSimcagLiveSelfCheck();
 if (!useInMemoryCache && !string.IsNullOrEmpty(redisForCache))
-    health.AddRedis(redisForCache, name: "redis");
+    health.AddRedis(redisForCache, name: "redis", tags: [SimcagHealthCheckExtensions.ReadyTag]);
 
 // Downstream health checks — Degraded; timeout curto para /health não bloquear ~10s por URI (default do HttpClient).
 static TimeSpan GatewayDownstreamHealthCheckTimeout()
@@ -227,6 +235,7 @@ var app = builder.Build();
 
 // Remove provas HMAC forjadas pelo cliente antes de JWT + recálculo no AuthenticationMiddleware.
 app.UseStripUntrustedGatewayProofHeaders();
+app.UseSimcagExceptionHandler();
 
 // Middleware pipeline — única UI HTTP: Swagger (sem wwwroot / index.html que interceptavam pedidos).
 app.UseSwagger();
@@ -248,6 +257,8 @@ app.UseSwaggerUI(options =>
 
 app.UseRouting();
 
+app.UseSimcagCors(app.Environment);
+
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 // Rate limit DEPOIS de validar JWT: antes `context.User` nunca estava autenticado e todo o tráfego
@@ -258,19 +269,29 @@ app.UseMiddleware<AuthZMiddleware>();
 app.UseMiddleware<ResponseCachingMiddleware>();
 app.UseMiddleware<ResponseFormatMiddleware>();
 
-app.UseAuthentication();
-app.UseAuthorization();
+// RBAC AUTHORIZATION (GRANULAR PERMISSIONS + SoD Checks)
+app.UseMiddleware<RbacAuthorizationMiddleware>();
+
+app.UseAuthentication(); // For downstream services que leem User.Identity via Forwarded Headers
+app.UseAuthorization();   // Fallback para [Authorize] policies nos endpoints dos serviços proxy
 
 app.MapControllers();
 
-// Liveness para Docker HEALTHCHECK: sem probes HTTP aos downstreams (evita timeout 3s do Docker vs /health ~3s+).
+// Liveness: só processo gateway. Readiness: Redis (se configurado). /health completo via StatusController.
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
-    Predicate = registration => registration.Tags is null || !registration.Tags.Contains("downstream"),
+    Predicate = registration => registration.Tags?.Contains(SimcagHealthCheckExtensions.LiveTag) == true,
+});
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags?.Contains(SimcagHealthCheckExtensions.ReadyTag) == true,
 });
 
 // YARP Proxy
 app.MapReverseProxy();
+
+// DLQ Middleware - captura erros do YARP e os roteia para filas de dead letter
+// app.UseGatewayDlq(); // Desativado temporariamente
 
 app.UseSimcagTelemetryEndpoints();
 
@@ -336,10 +357,9 @@ static void GatewayFallbackDownstreamToDockerHostWhenComposeDnsMissing()
     foreach (var row in GatewayDownstreamUrlSynthesis.Rows)
         Environment.SetEnvironmentVariable(row.Primary, $"http://{fallbackHost}:{row.DefaultPort}");
 
-    Console.WriteLine(
-        "[Simcag.Gateway] identity-service não resolve neste contentor — a usar http://" + fallbackHost
-        + ":5001–5008 (APIs no host). Rede não-default / rootless: defina SIMCAG_FALLBACK_HOST. "
-        + "Compose com DNS: SIMCAG_DISABLE_HOST_PORT_FALLBACK=1 ou SERVICES__*__URL.");
+    Log.Information(
+        "[Simcag.Gateway] identity-service não resolve neste contentor — a usar http://{FallbackHost}:5001–5008 (APIs no host). Rede não-default / rootless: defina SIMCAG_FALLBACK_HOST. Compose com DNS: SIMCAG_DISABLE_HOST_PORT_FALLBACK=1 ou SERVICES__*__URL.",
+        fallbackHost);
 }
 
 /// <summary>
@@ -487,11 +507,11 @@ static void GatewayLogImplicitDownstreamResolutionMode()
             return;
     }
 
-    Console.WriteLine(
-        "[Simcag.Gateway] Nenhuma URL downstream nas variáveis de ambiente: a usar os defaults do código " +
-        "(http://identity-service:8080, http://ingestion-service:8081, …). Isto só funciona na mesma rede " +
-        "que esses contentores (ex.: stack Compose). Se só corre o gateway, defina SIMCAG_SERVICES_HOST " +
-        "(ex.: host.docker.internal) ou SERVICES__*__URL com endereços alcançáveis.");
+    Log.Information(
+            "[Simcag.Gateway] Nenhuma URL downstream nas variáveis de ambiente: a usar os defaults do código " +
+            "(http://identity-service:8080, http://ingestion-service:8081, …). Isto só funciona na mesma rede " +
+            "que esses contentores (ex.: stack Compose). Se só corre o gateway, defina SIMCAG_SERVICES_HOST " +
+            "(ex.: host.docker.internal) ou SERVICES__*__URL com endereços alcançáveis.");
 }
 
 static string GatewayNormalizeServicesScheme()
@@ -666,4 +686,8 @@ file static class GatewayDownstreamEnvKeys
         "SERVICES__MARKET_DATA__URL",
         "SERVICES__AI__URL",
     ];
+}
+
+public partial class Program
+{
 }

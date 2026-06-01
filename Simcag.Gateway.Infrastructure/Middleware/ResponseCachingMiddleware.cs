@@ -5,14 +5,19 @@ using Simcag.Shared.Security;
 
 namespace Simcag.Gateway.Infrastructure.Middleware;
 
-public class ResponseCachingMiddleware
+/// <summary>
+/// Middleware de cache estratégico para dashboard e market data.
+/// Otimizado para endpoints de leitura frequente com dados relativamente estáticos.
+/// </summary>
+public sealed class ResponseCachingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IDistributedCache _cache;
     private readonly ILogger<ResponseCachingMiddleware> _logger;
-    private readonly string[] _cacheablePrefixes;
-    private readonly TimeSpan _absoluteExpiration;
-    private readonly TimeSpan _slidingExpiration;
+    private readonly TimeSpan _dashboardAbsoluteExpiration;
+    private readonly TimeSpan _dashboardSlidingExpiration;
+    private readonly TimeSpan _marketDataAbsoluteExpiration;
+    private readonly TimeSpan _marketDataSlidingExpiration;
 
     public ResponseCachingMiddleware(
         RequestDelegate next,
@@ -22,9 +27,14 @@ public class ResponseCachingMiddleware
         _next = next;
         _cache = cache;
         _logger = logger;
-        _cacheablePrefixes = ParsePrefixes(Environment.GetEnvironmentVariable("GATEWAY_RESPONSE_CACHE_PREFIXES"));
-        _absoluteExpiration = ParseDuration("GATEWAY_RESPONSE_CACHE_ABSOLUTE_SECONDS", TimeSpan.FromSeconds(30));
-        _slidingExpiration = ParseDuration("GATEWAY_RESPONSE_CACHE_SLIDING_SECONDS", TimeSpan.FromSeconds(10));
+
+        // Cache estratégico para dashboard (dados mais estáticos)
+        _dashboardAbsoluteExpiration = ParseDuration("GATEWAY_DASHBOARD_CACHE_ABSOLUTE_SECONDS", TimeSpan.FromMinutes(5));
+        _dashboardSlidingExpiration = ParseDuration("GATEWAY_DASHBOARD_CACHE_SLIDING_SECONDS", TimeSpan.FromMinutes(2));
+
+        // Cache estratégico para market data (dados mais dinâmicos)
+        _marketDataAbsoluteExpiration = ParseDuration("GATEWAY_MARKET_DATA_CACHE_ABSOLUTE_SECONDS", TimeSpan.FromMinutes(1));
+        _marketDataSlidingExpiration = ParseDuration("GATEWAY_MARKET_DATA_CACHE_SLIDING_SECONDS", TimeSpan.FromSeconds(30));
     }
 
     // Rotas que nunca devem ser cacheadas (diagnóstico, Swagger, autenticação).
@@ -39,33 +49,47 @@ public class ResponseCachingMiddleware
         || path.EndsWith("/swagger.json", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// GETs que mudam com ingestão / writes — não cachear mesmo que
-    /// <c>GATEWAY_RESPONSE_CACHE_PREFIXES</c> inclua um prefixo largo (ex.: <c>/api</c>).
+    /// Endpoints que devem sempre bypassar o cache (dados em tempo real ou writes).
     /// </summary>
-    private static readonly string[] AlwaysBypassGatewayResponseCachePrefixes =
+    private static readonly HashSet<string> AlwaysBypassCache = new(StringComparer.OrdinalIgnoreCase)
     {
         "/api/expenses",
         "/api/ingestion",
-        "/api/dashboard",
         "/api/compliance",
         "/api/payments",
-        "/api/products",
-        "/api/suppliers",
-        "/api/condominios",
         "/api/alerts",
         "/api/AlertRules",
         "/api/notifications",
         "/api/audit-logs",
     };
 
-    private static bool IsAlwaysBypassGatewayResponseCache(string path) =>
-        AlwaysBypassGatewayResponseCachePrefixes.Any(p =>
-            path.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// Endpoints de dashboard que devem ser cacheados com TTL mais longo.
+    /// </summary>
+    private static readonly HashSet<string> DashboardEndpoints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "/api/dashboard",
+        "/api/dashboard/summary",
+        "/api/dashboard/kpis",
+        "/api/dashboard/overview",
+    };
+
+    /// <summary>
+    /// Endpoints de market data que devem ser cacheados com TTL mais curto.
+    /// </summary>
+    private static readonly HashSet<string> MarketDataEndpoints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "/api/market-data",
+        "/api/market-data/prices",
+        "/api/market-data/products",
+        "/api/market-data/benchmarks",
+    };
 
     public async Task InvokeAsync(HttpContext context)
     {
         var path = context.Request.Path.Value ?? string.Empty;
 
+        // Bypass para métodos não GET e rotas proibidas
         if (!context.Request.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)
             || NoCachePrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))
             || IsDocProxyPath(path))
@@ -74,14 +98,8 @@ public class ResponseCachingMiddleware
             return;
         }
 
-        if (IsAlwaysBypassGatewayResponseCache(path))
-        {
-            ApplyNoStoreHeaders(context.Response);
-            await _next(context);
-            return;
-        }
-
-        if (!IsCacheablePath(path) || RequestBypassesCache(context.Request))
+        // Sempre bypass para endpoints de dados em tempo real
+        if (AlwaysBypassCache.Contains(path) || AlwaysBypassCache.Any(p => path.StartsWith(p)))
         {
             ApplyNoStoreHeaders(context.Response);
             await _next(context);
@@ -89,66 +107,126 @@ public class ResponseCachingMiddleware
         }
 
         var cacheKey = GenerateCacheKey(context.Request);
+        var isDashboardEndpoint = DashboardEndpoints.Contains(path) || DashboardEndpoints.Any(p => path.StartsWith(p));
+        var isMarketDataEndpoint = MarketDataEndpoints.Contains(path) || MarketDataEndpoints.Any(p => path.StartsWith(p));
+        var requestBypassesCache = RequestBypassesCache(context.Request);
 
-        var cachedResponse = await _cache.GetStringAsync(cacheKey);
-
-        if (cachedResponse != null)
+        if (requestBypassesCache)
         {
-            _logger.LogDebug("Gateway response cache hit: {CacheKey}", cacheKey);
-            context.Response.StatusCode = 200;
-            context.Response.ContentType = "application/json";
-            context.Response.Headers.CacheControl = "private, max-age=30";
-            context.Response.Headers["X-Simcag-Cache"] = "HIT";
-            await context.Response.WriteAsync(cachedResponse);
+            ApplyNoStoreHeaders(context.Response);
+            await _next(context);
             return;
         }
 
-        var originalBodyStream = context.Response.Body;
-        using var responseBody = new MemoryStream();
-        context.Response.Body = responseBody;
+        // Dashboard: cache mais longo (dados relativamente estáticos)
+        if (isDashboardEndpoint)
+        {
+            var cachedResponse = await _cache.GetStringAsync(cacheKey);
 
+            if (cachedResponse != null)
+            {
+                _logger.LogDebug("Dashboard cache hit: {CacheKey}", cacheKey);
+                context.Response.StatusCode = 200;
+                context.Response.ContentType = "application/json";
+                context.Response.Headers.CacheControl = "private, max-age=300"; // 5 minutos
+                context.Response.Headers["X-Simcag-Cache"] = "HIT";
+                context.Response.Headers["X-Simcag-Cache-Type"] = "dashboard";
+                await context.Response.WriteAsync(cachedResponse);
+                return;
+            }
+
+            var originalBodyStream = context.Response.Body;
+            using var responseBody = new MemoryStream();
+            context.Response.Body = responseBody;
+
+            await _next(context);
+
+            if (CanStoreResponse(context.Response))
+            {
+                responseBody.Seek(0, SeekOrigin.Begin);
+                var responseBodyText = await new StreamReader(responseBody).ReadToEndAsync();
+
+                var cacheOptions = new DistributedCacheEntryOptions()
+                    .SetAbsoluteExpiration(_dashboardAbsoluteExpiration)
+                    .SetSlidingExpiration(_dashboardSlidingExpiration);
+
+                await _cache.SetStringAsync(cacheKey, responseBodyText, cacheOptions);
+
+                _logger.LogInformation("Dashboard response cached: {CacheKey}", cacheKey);
+                context.Response.Headers["X-Simcag-Cache"] = "MISS";
+                context.Response.Headers["X-Simcag-Cache-Type"] = "dashboard";
+
+                responseBody.Seek(0, SeekOrigin.Begin);
+                await responseBody.CopyToAsync(originalBodyStream);
+            }
+            else
+            {
+                responseBody.Seek(0, SeekOrigin.Begin);
+                await responseBody.CopyToAsync(originalBodyStream);
+            }
+            return;
+        }
+
+        // Market Data: cache mais curto (dados dinâmicos)
+        if (isMarketDataEndpoint)
+        {
+            var cachedResponse = await _cache.GetStringAsync(cacheKey);
+
+            if (cachedResponse != null)
+            {
+                _logger.LogDebug("Market data cache hit: {CacheKey}", cacheKey);
+                context.Response.StatusCode = 200;
+                context.Response.ContentType = "application/json";
+                context.Response.Headers.CacheControl = "private, max-age=30"; // 30 segundos
+                context.Response.Headers["X-Simcag-Cache"] = "HIT";
+                context.Response.Headers["X-Simcag-Cache-Type"] = "market-data";
+                await context.Response.WriteAsync(cachedResponse);
+                return;
+            }
+
+            var originalBodyStream = context.Response.Body;
+            using var responseBody = new MemoryStream();
+            context.Response.Body = responseBody;
+
+            await _next(context);
+
+            if (CanStoreResponse(context.Response))
+            {
+                responseBody.Seek(0, SeekOrigin.Begin);
+                var responseBodyText = await new StreamReader(responseBody).ReadToEndAsync();
+
+                var cacheOptions = new DistributedCacheEntryOptions()
+                    .SetAbsoluteExpiration(_marketDataAbsoluteExpiration)
+                    .SetSlidingExpiration(_marketDataSlidingExpiration);
+
+                await _cache.SetStringAsync(cacheKey, responseBodyText, cacheOptions);
+
+                _logger.LogInformation("Market data response cached: {CacheKey}", cacheKey);
+                context.Response.Headers["X-Simcag-Cache"] = "MISS";
+                context.Response.Headers["X-Simcag-Cache-Type"] = "market-data";
+
+                responseBody.Seek(0, SeekOrigin.Begin);
+                await responseBody.CopyToAsync(originalBodyStream);
+            }
+            else
+            {
+                responseBody.Seek(0, SeekOrigin.Begin);
+                await responseBody.CopyToAsync(originalBodyStream);
+            }
+            return;
+        }
+
+        // Outros endpoints: sem cache (bypass)
+        ApplyNoStoreHeaders(context.Response);
         await _next(context);
-
-        if (CanStoreResponse(context.Response))
-        {
-            responseBody.Seek(0, SeekOrigin.Begin);
-            var responseBodyText = await new StreamReader(responseBody).ReadToEndAsync();
-
-            var cacheOptions = new DistributedCacheEntryOptions()
-                .SetAbsoluteExpiration(_absoluteExpiration)
-                .SetSlidingExpiration(_slidingExpiration);
-
-            await _cache.SetStringAsync(cacheKey, responseBodyText, cacheOptions);
-
-            _logger.LogDebug("Gateway response cached: {CacheKey}", cacheKey);
-            context.Response.Headers["X-Simcag-Cache"] = "MISS";
-
-            responseBody.Seek(0, SeekOrigin.Begin);
-            await responseBody.CopyToAsync(originalBodyStream);
-        }
-        else
-        {
-            responseBody.Seek(0, SeekOrigin.Begin);
-            await responseBody.CopyToAsync(originalBodyStream);
-        }
     }
 
     private string GenerateCacheKey(HttpRequest request)
     {
         var path = request.Path.ToString();
         var query = request.QueryString.ToString();
-        var userId = request.Headers[GatewayForwardedAuthHeaders.UserId].FirstOrDefault() ?? "anonymous";
         var tenantId = request.Headers[GatewayForwardedAuthHeaders.TenantId].FirstOrDefault() ?? "no-tenant";
-        var role = request.Headers[GatewayForwardedAuthHeaders.UserRole].FirstOrDefault() ?? "no-role";
-        return $"gw:cache:{tenantId}:{userId}:{role}:{path}{query}";
-    }
-
-    private bool IsCacheablePath(string path)
-    {
-        if (_cacheablePrefixes.Length == 0)
-            return false;
-
-        return _cacheablePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        return $"gw:cache:{tenantId}:{path}{query}";
     }
 
     private static bool RequestBypassesCache(HttpRequest request)
@@ -170,8 +248,7 @@ public class ResponseCachingMiddleware
             return false;
 
         var cacheControl = response.Headers.CacheControl.ToString();
-        return !cacheControl.Contains("no-store", StringComparison.OrdinalIgnoreCase)
-               && !cacheControl.Contains("private", StringComparison.OrdinalIgnoreCase);
+        return !cacheControl.Contains("no-store", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ApplyNoStoreHeaders(HttpResponse response)
@@ -179,18 +256,6 @@ public class ResponseCachingMiddleware
         response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         response.Headers.Pragma = "no-cache";
         response.Headers.Expires = "0";
-    }
-
-    private static string[] ParsePrefixes(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return [];
-
-        return raw
-            .Split(';', ',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Where(prefix => prefix.StartsWith('/'))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
     }
 
     private static TimeSpan ParseDuration(string envKey, TimeSpan fallback)

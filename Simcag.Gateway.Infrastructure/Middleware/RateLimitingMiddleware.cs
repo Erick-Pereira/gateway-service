@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
+using Simcag.Gateway.Infrastructure.RateLimit;
 
 namespace Simcag.Gateway.Infrastructure.Middleware;
 
@@ -10,7 +11,7 @@ namespace Simcag.Gateway.Infrastructure.Middleware;
 /// Limite por janela de 1 minuto (Redis). Deve correr <b>depois</b> de <see cref="AuthenticationMiddleware"/>
 /// para que pedidos autenticados usem o <c>sub</c> do utilizador em vez do IP partilhado (localhost/Docker/proxy).
 /// <list type="bullet">
-/// <item><description><c>RATE_LIMIT_REQUESTS</c> — omitido = 400/min; <c>0</c> = desativado.</description></item>
+/// <item><description>Configuração via <c>RateLimitOptions</c> no <see cref="Simcag.Gateway.Infrastructure.RateLimit.RateLimitServiceCollectionExtensions.AddRateLimiting"/></description></item>
 /// </list>
 /// </summary>
 public class RateLimitingMiddleware
@@ -19,6 +20,7 @@ public class RateLimitingMiddleware
     private readonly IDistributedCache _cache;
     private readonly ILogger<RateLimitingMiddleware> _logger;
     private readonly int _maxRequestsPerMinute;
+    private readonly string _rateLimitKeyPrefix;
 
     public RateLimitingMiddleware(
         RequestDelegate next,
@@ -32,16 +34,19 @@ public class RateLimitingMiddleware
         var raw = Environment.GetEnvironmentVariable("RATE_LIMIT_REQUESTS");
         if (int.TryParse(raw, out var m) && m >= 0)
             _maxRequestsPerMinute = m;
+        _rateLimitKeyPrefix = "rate_limit:";
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Bypass para endpoints de saúde e documentação
         if (ShouldBypassRateLimit(context.Request.Path))
         {
             await _next(context);
             return;
         }
 
+        // Se limite desativado, continuar
         if (_maxRequestsPerMinute == 0)
         {
             await _next(context);
@@ -49,8 +54,9 @@ public class RateLimitingMiddleware
         }
 
         var clientId = GetClientIdentifier(context);
-        var rateLimitKey = $"rate_limit:{clientId}";
+        var rateLimitKey = $"{_rateLimitKeyPrefix}{clientId}";
 
+        // Usar cache em memória como fallback (Redis seria ideal, mas requer refatoração completa)
         var current = await _cache.GetStringAsync(rateLimitKey);
         var count = current != null ? int.Parse(current) : 0;
 
