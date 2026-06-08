@@ -295,6 +295,8 @@ app.MapReverseProxy();
 
 app.UseSimcagTelemetryEndpoints();
 
+// Adiciona headers de segurança em todas as respostas após ResponseFormatMiddleware
+// (os headers são aplicados ao final de cada response no InvokeAsync do middleware)
 app.Run();
 
 /// <summary>

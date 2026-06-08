@@ -35,8 +35,9 @@ public readonly record struct TokenClaimsData
                        !SodCanExecuteAudit;
             }
 
+            // Admin válido quando SoD impede aprovar própria compra (claim sod:can_approve_own_purchase=false).
             if (Role == SimcagRoles.Admin)
-                return CanApproveOwnPurchase;
+                return !CanApproveOwnPurchase;
 
             if (Role is SimcagRoles.Sindico or SimcagRoles.Conselho)
                 return !SodCanExecuteAudit;

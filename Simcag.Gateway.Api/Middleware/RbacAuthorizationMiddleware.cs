@@ -7,6 +7,16 @@ namespace Simcag.Gateway.Api.Middleware;
 /// <summary>
 /// Middleware centralizado de autorização RBAC no gateway.
 /// Intercepta HTTP requests, valida JWT claims e aplica regras SoD por endpoint.
+///
+/// **Como funciona:**
+/// 1. Verifica se usuário está autenticado (JWT válido)
+/// 2. Extrai claims do token (role, permissions, tenant_id)
+/// 3. Aplica políticas de Segregation of Duties (SoD):
+///    - Admin não pode aprovar próprias compras
+///    - Uploads de documentos só para Administradora
+///    - Auditoria exclusiva para Admin perfil
+///
+/// **Endpoints públicos:** /health, /swagger, /api/auth/*, /api/condominios/lookup
 /// </summary>
 public class RbacAuthorizationMiddleware
 {

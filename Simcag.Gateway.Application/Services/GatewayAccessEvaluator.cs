@@ -25,8 +25,15 @@ public sealed class GatewayAccessEvaluator : IGatewayAccessEvaluator
         if (string.Equals(resource, GatewayAccessResources.Admin, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        if (string.Equals(resource, GatewayAccessResources.Notification, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(action, GatewayAccessActions.Manage, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return user.Role is Role.SINDICO or Role.CONSELHO;
+        }
+
         if (string.Equals(resource, GatewayAccessResources.Alert, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(resource, GatewayAccessResources.Notification, StringComparison.OrdinalIgnoreCase)
             || string.Equals(resource, GatewayAccessResources.Report, StringComparison.OrdinalIgnoreCase))
             return user.Role is Role.SINDICO or Role.CONSELHO;
 
