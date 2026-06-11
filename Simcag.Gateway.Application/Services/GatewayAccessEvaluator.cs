@@ -10,7 +10,13 @@ public sealed class GatewayAccessEvaluator : IGatewayAccessEvaluator
     public bool IsAllowed(UserContext user, string resource, string action)
     {
         if (user.Role == Role.ADMIN)
+        {
+            // Segregação de Funções (SoD): Administrador não pode aprovar compras.
+            if (resource == GatewayAccessResources.Compras && action == GatewayAccessActions.Approve)
+                return false;
+
             return true;
+        }
 
         if (user.Permissions is { Count: > 0 })
         {
@@ -33,9 +39,23 @@ public sealed class GatewayAccessEvaluator : IGatewayAccessEvaluator
             return user.Role is Role.SINDICO or Role.CONSELHO;
         }
 
-        if (string.Equals(resource, GatewayAccessResources.Alert, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(resource, GatewayAccessResources.Report, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(resource, GatewayAccessResources.Alert, StringComparison.OrdinalIgnoreCase))
+        {
+            // Segregação de Funções: Síndico/Conselho apenas visualiza (Read/Approve), Admin gerencia (Manage).
+            if (string.Equals(action, GatewayAccessActions.Manage, StringComparison.OrdinalIgnoreCase))
+                return user.Role is Role.ADMIN;
+
             return user.Role is Role.SINDICO or Role.CONSELHO;
+        }
+
+        if (string.Equals(resource, GatewayAccessResources.Report, StringComparison.OrdinalIgnoreCase))
+        {
+            // Dashboard Differentiation: Morador vê apenas overview, outros veem full.
+            if (string.Equals(action, "view_full", StringComparison.OrdinalIgnoreCase))
+                return user.Role is Role.SINDICO or Role.ADMIN;
+
+            return true;
+        }
 
         return false;
     }

@@ -206,9 +206,9 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
     {
-        Title = "SIMC-AG Gateway",
+        Title = "Econdomiza - Gateway",
         Version = "v1",
-        Description = "API Gateway do SIMC-AG (auditoria condominial). Use o botão Authorize com um JWT do Identity Service para testar rotas autenticadas."
+        Description = "API Gateway do Econdomiza (auditoria condominial). Use o botão Authorize com um JWT do Identity Service para testar rotas autenticadas."
     });
 
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
@@ -252,7 +252,7 @@ app.UseSwaggerUI(options =>
     options.SwaggerEndpoint("/api/market-data-docs/swagger/v1/swagger.json", "Market Data");
     options.SwaggerEndpoint("/api/ai-docs/swagger/v1/swagger.json", "IA (AI Service)");
     options.RoutePrefix = "swagger";
-    options.DocumentTitle = "SIMC-AG Gateway — Swagger";
+    options.DocumentTitle = "Econdomiza - Gateway — Swagger";
 });
 
 app.UseRouting();

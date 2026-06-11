@@ -11,6 +11,9 @@ public static class GatewayAccessResources
     public const string Alert = "alert";
     public const string Notification = "notification";
     public const string Report = "report";
+    public const string Compras = "compras";
+    public const string Dashboard = "dashboard";
+    public const string Audit = "audit";
 }
 
 /// <summary>Ações lógicas avaliadas no edge (não confundir com verbos HTTP).</summary>
@@ -20,4 +23,6 @@ public static class GatewayAccessActions
     public const string Write = "write";
     public const string Manage = "manage";
     public const string Wildcard = "*";
+    public const string Approve = "approve";
+    public const string view_full = "view_full";
 }

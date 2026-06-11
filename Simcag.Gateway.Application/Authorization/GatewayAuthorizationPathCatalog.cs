@@ -24,7 +24,12 @@ public static class GatewayAuthorizationPathCatalog
         ("/api/notifications/templates", GatewayAccessResources.Notification, GatewayAccessActions.Read),
         ("/api/audit/report", GatewayAccessResources.Report, GatewayAccessActions.Read),
         ("/api/audit/", GatewayAccessResources.Report, GatewayAccessActions.Read),
+        ("/api/dashboard/full", GatewayAccessResources.Dashboard, GatewayAccessActions.view_full),
+        ("/api/dashboard", GatewayAccessResources.Dashboard, GatewayAccessActions.Read),
         ("/api/admin/", GatewayAccessResources.Admin, GatewayAccessActions.Wildcard),
+        ("/api/compras/approve", GatewayAccessResources.Compras, GatewayAccessActions.Approve),
+        ("/api/compras/", GatewayAccessResources.Compras, GatewayAccessActions.Write),
+        ("/api/compras/read", GatewayAccessResources.Compras, GatewayAccessActions.Read),
     };
 
     /// <summary>
