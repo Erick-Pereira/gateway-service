@@ -26,7 +26,15 @@ public sealed class GatewayAccessEvaluator : IGatewayAccessEvaluator
         }
 
         if (string.Equals(resource, GatewayAccessResources.Ingestion, StringComparison.OrdinalIgnoreCase))
-            return user.Role is Role.SINDICO;
+        {
+            if (string.Equals(action, GatewayAccessActions.Write, StringComparison.OrdinalIgnoreCase))
+                return user.Role is Role.SINDICO;
+
+            if (string.Equals(action, GatewayAccessActions.Read, StringComparison.OrdinalIgnoreCase))
+                return user.Role is Role.SINDICO or Role.CONSELHO;
+
+            return false;
+        }
 
         if (string.Equals(resource, GatewayAccessResources.Admin, StringComparison.OrdinalIgnoreCase))
             return false;
@@ -46,6 +54,17 @@ public sealed class GatewayAccessEvaluator : IGatewayAccessEvaluator
                 return user.Role is Role.ADMIN;
 
             return user.Role is Role.SINDICO or Role.CONSELHO;
+        }
+
+        if (string.Equals(resource, GatewayAccessResources.Dashboard, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(action, GatewayAccessActions.view_full, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(action, GatewayAccessActions.Read, StringComparison.OrdinalIgnoreCase))
+            {
+                return user.Role is Role.SINDICO or Role.CONSELHO or Role.ADMIN;
+            }
+
+            return false;
         }
 
         if (string.Equals(resource, GatewayAccessResources.Report, StringComparison.OrdinalIgnoreCase))

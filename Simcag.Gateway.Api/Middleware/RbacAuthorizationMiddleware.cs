@@ -13,7 +13,7 @@ namespace Simcag.Gateway.Api.Middleware;
 /// 2. Extrai claims do token (role, permissions, tenant_id)
 /// 3. Aplica políticas de Segregation of Duties (SoD):
 ///    - Admin não pode aprovar próprias compras
-///    - Uploads de documentos só para Administradora
+///    - Uploads de documentos para Administradora e Síndico
 ///    - Auditoria exclusiva para Admin perfil
 ///
 /// **Endpoints públicos:** /health, /swagger, /api/auth/*, /api/condominios/lookup
@@ -142,24 +142,27 @@ public class RbacAuthorizationMiddleware
 
         if (IsDocumentUploadEndpoint(context))
         {
-            if (!string.Equals(claims.Role, SimcagRoles.Admin, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(claims.Role, SimcagRoles.Admin, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(claims.Role, SimcagRoles.Sindico, StringComparison.OrdinalIgnoreCase))
             {
-                await RejectForbiddenAsync(
-                    context,
-                    new Dictionary<string, string>
-                    {
-                        ["error"] = "RBAC_PermissionDenied",
-                        ["message"] =
-                            $"Upload de documentos exclusivo da Administradora. Perfil '{claims.Profile}' não autorizado."
-                    });
                 return;
             }
+
+            await RejectForbiddenAsync(
+                context,
+                new Dictionary<string, string>
+                {
+                    ["error"] = "RBAC_PermissionDenied",
+                    ["message"] =
+                        $"Upload de documentos permitido apenas para Administradora ou Síndico. Perfil '{claims.Profile ?? claims.Role}' não autorizado."
+                });
+            return;
         }
     }
 
     private static bool IsDocumentUploadEndpoint(HttpContext context) =>
-        context.Request.Path.StartsWithSegments("/api/auditoria/upload") ||
-        (context.Request.ContentType?.Contains("multipart", StringComparison.OrdinalIgnoreCase) == true);
+        context.Request.Path.StartsWithSegments("/api/ingestion/upload", StringComparison.OrdinalIgnoreCase)
+        || context.Request.Path.StartsWithSegments("/api/auditoria/upload", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsAuditExecutionEndpoint(PathString path) =>
         path.StartsWithSegments("/api/auditoria/executar") ||
